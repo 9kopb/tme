@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Голос → список задач</title>
+<style>
+:root {
+  --bg: #f4f5f7; --card: #ffffff; --text: #1c1e21; --muted: #6b7280; --line: #e3e5e8;
+  --accent: #4f46e5; --accent-text: #ffffff; --danger: #dc2626; --ok: #16a34a;
+  --err-bg: #fef2f2; --err-text: #991b1b; --hint-bg: #eef2ff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111317; --card: #1b1e24; --text: #e8eaed; --muted: #9aa0a9; --line: #2e323a;
+    --accent: #818cf8; --accent-text: #11131a; --danger: #f87171; --ok: #4ade80;
+    --err-bg: #3b1d1d; --err-text: #fecaca; --hint-bg: #23264a;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; overflow-x: hidden; }
+body {
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg); color: var(--text);
+}
+main { max-width: 720px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 1.4rem; margin: 8px 0 16px; }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button {
+  border: 1px solid var(--line); background: var(--card); border-radius: 10px;
+  padding: 10px 14px; cursor: pointer; min-height: 44px;
+}
+button:disabled { opacity: .5; cursor: not-allowed; }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+button.primary.rec { background: var(--danger); border-color: var(--danger); color: #fff; }
+button.small { min-height: 36px; padding: 6px 12px; font-size: .9rem; }
+button.danger { color: var(--danger); }
+input[type=text], input[type=password], select, textarea {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg); font-size: 16px;
+}
+label { display: block; font-size: .85rem; color: var(--muted); margin: 10px 0 4px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.row > * { flex: 0 0 auto; }
+.grow { flex: 1 1 200px !important; }
+.hint { background: var(--hint-bg); border-radius: 10px; padding: 10px 12px; font-size: .9rem; margin-top: 12px; }
+.hint a { color: var(--accent); }
+.status { margin-top: 12px; color: var(--muted); min-height: 1.5em; }
+.timer { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--danger); }
+.error { background: var(--err-bg); color: var(--err-text); border-radius: 10px; padding: 10px 12px; margin-top: 12px; white-space: pre-wrap; word-break: break-word; }
+details.settings summary { cursor: pointer; font-weight: 600; }
+body.drag::after {
+  content: "Отпустите файл, чтобы распознать"; position: fixed; inset: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: center; text-align: center; padding: 16px;
+  background: rgba(79, 70, 229, .85); color: #fff; font-size: 1.4rem; font-weight: 600;
+}
+.card-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.card h2 { font-size: 1.15rem; margin: 0; word-break: break-word; }
+.date { color: var(--muted); font-size: .85rem; }
+ul.tasks { list-style: none; margin: 12px 0; padding: 0; }
+ul.tasks li {
+  display: flex; gap: 12px; align-items: flex-start; padding: 10px 6px; border-bottom: 1px solid var(--line);
+  cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+ul.tasks li:last-child { border-bottom: 0; }
+.box {
+  flex: 0 0 auto; width: 28px; height: 28px; border: 2px solid var(--muted); border-radius: 8px;
+  display: flex; align-items: center; justify-content: center; font-size: 18px; line-height: 1;
+}
+li.done .box { border-color: var(--ok); background: var(--ok); color: #fff; }
+li.done .txt { text-decoration: line-through; color: var(--muted); opacity: .75; }
+.txt { padding-top: 2px; word-break: break-word; }
+.empty { margin: 12px 0; font-weight: 600; }
+details.tr { margin-top: 8px; }
+details.tr summary { cursor: pointer; color: var(--muted); }
+details.tr p { white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; background: var(--bg); padding: 10px 12px; border-radius: 10px; }
+.actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.none { text-align: center; color: var(--muted); padding: 24px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎙 Голос → список задач</h1>
+
+  <section class="panel">
+    <div class="row">
+      <button id="recBtn" class="primary grow" type="button">🎙 Записать</button>
+      <span id="timer" class="timer" hidden>00:00</span>
+      <label for="fileInput" class="row" style="margin:0">
+        <input id="fileInput" type="file" accept="audio/*,video/*" disabled>
+      </label>
+    </div>
+    <div id="keyHint" class="hint" hidden>
+      Чтобы начать, введите ключ Groq API в настройках ниже. Получить бесплатно:
+      <a href="https://console.groq.com/keys" target="_blank" rel="noopener">https://console.groq.com/keys</a>
+    </div>
+    <div id="status" class="status" aria-live="polite"></div>
+    <div id="errorBox" class="error" hidden></div>
+    <p class="date" style="margin:12px 0 0">Можно перетащить аудио или видеофайл прямо на страницу (до 25 МБ).</p>
+  </section>
+
+  <details class="panel settings" id="settings">
+    <summary>⚙️ Настройки</summary>
+    <label for="keyInput">Ключ Groq API (хранится только в вашем браузере)</label>
+    <input id="keyInput" type="password" autocomplete="off" placeholder="gsk_…">
+    <label for="langSel">Язык речи</label>
+    <select id="langSel">
+      <option value="ru">Русский</option>
+      <option value="">Автоопределение</option>
+      <option value="en">English</option>
+      <option value="uk">Українська</option>
+      <option value="de">Deutsch</option>
+      <option value="fr">Français</option>
+      <option value="es">Español</option>
+    </select>
+    <label for="whisperInput">Модель распознавания речи</label>
+    <input id="whisperInput" type="text" autocomplete="off">
+    <label for="modelsInput">Модели для разбора на задачи (через запятую, по порядку)</label>
+    <input id="modelsInput" type="text" autocomplete="off">
+  </details>
+
+  <section id="cards"></section>
+</main>
+
+<script>
+'use strict';
+
+const STORAGE_KEY = 'voice-todo-v1';
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_CHUNK_CHARS = 10000;
+const MAX_TASK_CHARS = 300;
+const DEFAULT_SETTINGS = {
+  key: '',
+  lang: 'ru',
+  whisper: 'whisper-large-v3-turbo',
+  models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b']
+};
+
+const SYSTEM_PROMPT = `Ты превращаешь расшифровку голосового сообщения в список дел (todo).
+Правила:
+- Найди все действия, которые нужно сделать: дела, поручения, покупки, звонки, встречи, напоминания. Не придумывай того, чего нет в тексте.
+- Уже сделанное, рассуждения и пересказ событий — не задачи.
+- Одна задача — одно действие. Если в одной фразе несколько дел — раздели их. Повторы объедини.
+- Формулируй коротко, начиная с глагола: «Купить молоко», «Позвонить Ивану насчёт договора».
+- Сохраняй важные детали: кому, что, сколько, где и когда («— до пятницы», «— завтра в 10:00»).
+- Исправляй очевидные ошибки распознавания речи, убирай слова-паразиты.
+- Пиши на языке исходного текста, задачи — в порядке упоминания.
+- title — 2–4 слова о сути списка: «Дела на завтра», «Покупки», «Ремонт на даче».
+Ответь только JSON: {"title": "...", "tasks": ["...", "..."]}
+Если задач в тексте нет — {"title": "", "tasks": []}`;
+
+const $ = id => document.getElementById(id);
+let state = { cards: [], settings: { ...DEFAULT_SETTINGS } };
+let busy = false;
+let recorder = null, recStream = null, recChunks = [], recTimerId = null, recStart = 0;
+
+/* ---------- хранилище ---------- */
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (Array.isArray(data.cards)) state.cards = data.cards;
+    if (data.settings && typeof data.settings === 'object') {
+      state.settings = { ...DEFAULT_SETTINGS, ...data.settings };
+      if (!Array.isArray(state.settings.models) || !state.settings.models.length) {
+        state.settings.models = DEFAULT_SETTINGS.models.slice();
+      }
+    }
+  } catch (e) { /* хранилище недоступно или повреждено */ }
+}
+
+function save() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* игнорируем */ }
+}
+
+/* ---------- вспомогательное ---------- */
+
+function setStatus(text) { $('status').textContent = text || ''; }
+
+function showError(text) {
+  const box = $('errorBox');
+  box.textContent = text || '';
+  box.hidden = !text;
+}
+
+function netHint() {
+  return 'Не удалось связаться с Groq (сеть или CORS). Проверьте интернет и попробуйте открыть файл ' +
+    'через локальный сервер: python -m http.server, затем http://localhost:8000/index.html.';
+}
+
+async function groqError(resp) {
+  let msg = '';
+  try {
+    const t = await resp.text();
+    try { const j = JSON.parse(t); msg = (j.error && j.error.message) || j.message || t; } catch (e) { msg = t; }
+  } catch (e) { /* пусто */ }
+  const err = new Error(`Groq ответил ${resp.status}${msg ? ': ' + msg : ''}`);
+  err.status = resp.status;
+  return err;
+}
+
+async function groqFetch(url, options) {
+  let resp;
+  try {
+    resp = await fetch(url, options);
+  } catch (e) {
+    const err = new Error(netHint());
+    err.network = true;
+    throw err;
+  }
+  if (!resp.ok) throw await groqError(resp);
+  return resp;
+}
+
+function authHeaders() { return { Authorization: 'Bearer ' + state.settings.key }; }
+
+function normKey(s) {
+  return s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+}
+
+function fmtTime(sec) {
+  const m = String(Math.floor(sec / 60)).padStart(2, '0');
+  const s = String(sec % 60).padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+function fmtDate(ts) {
+  return new Date(ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/* ---------- Groq ---------- */
+
+async function transcribe(blob, filename) {
+  const fd = new FormData();
+  fd.append('file', blob, filename);
+  fd.append('model', state.settings.whisper || DEFAULT_SETTINGS.whisper);
+  fd.append('response_format', 'text');
+  fd.append('temperature', '0');
+  if (state.settings.lang) fd.append('language', state.settings.lang);
+  const resp = await groqFetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    method: 'POST', headers: authHeaders(), body: fd
+  });
+  return (await resp.text()).trim();
+}
+
+// Один запрос к одной модели; возвращает сырой текст ответа
+async function chatOnce(model, text) {
+  const resp = await groqFetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: 'Расшифровка:\n\n' + text }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+      max_completion_tokens: 3000,
+      reasoning_effort: 'low'
+    })
+  });
+  const data = await resp.json();
+  return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+}
+
+// Пробует модели по очереди: при 429/404/400 или кривом JSON — следующая
+async function askLLM(text) {
+  const models = state.settings.models;
+  let lastErr = null;
+  for (const model of models) {
+    try {
+      const raw = await chatOnce(model, text);
+      return extractTasks(raw);
+    } catch (e) {
+      lastErr = e;
+      if (e.network) throw e;
+      const retryable = e.status === 429 || e.status === 404 || e.status === 400 || e.parseFail;
+      if (!retryable) throw e;
+    }
+  }
+  throw lastErr || new Error('Не заданы модели для разбора');
+}
+
+function cleanTask(t) {
+  if (t && typeof t === 'object') {
+    t = Object.values(t).find(v => typeof v === 'string') || '';
+  }
+  if (typeof t !== 'string') return '';
+  let s = t.replace(/\s+/g, ' ').trim();
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/^(?:\d+\s*[.)]|[-–•*☐⬜✅☑✔])\s*/u, '').trim();
+  } while (s !== prev);
+  if (s.length > MAX_TASK_CHARS) s = s.slice(0, MAX_TASK_CHARS - 1).trimEnd() + '…';
+  return s;
+}
+
+function extractTasks(raw) {
+  let obj;
+  try {
+    obj = JSON.parse(raw);
+  } catch (e) {
+    const m = String(raw).match(/\{[\s\S]*\}/);
+    try { obj = m ? JSON.parse(m[0]) : null; } catch (e2) { obj = null; }
+  }
+  if (!obj || !Array.isArray(obj.tasks)) {
+    const err = new Error('Модель вернула ответ в неверном формате');
+    err.parseFail = true;
+    throw err;
+  }
+  const tasks = obj.tasks.map(cleanTask).filter(Boolean);
+  const title = typeof obj.title === 'string' ? obj.title.replace(/\s+/g, ' ').trim().slice(0, 80) : '';
+  return { title, tasks };
+}
+
+// Режет текст по границам предложений на части не длиннее max
+function splitText(text, max = MAX_CHUNK_CHARS) {
+  text = text.trim();
+  if (text.length <= max) return text ? [text] : [];
+  const sentences = text.match(/[^.!?…\n]+[.!?…]*\s*|\n+/g) || [text];
+  const chunks = [];
+  let cur = '';
+  const push = () => { if (cur.trim()) chunks.push(cur.trim()); cur = ''; };
+  for (let s of sentences) {
+    while (s.length > max) { // предложение длиннее лимита — режем по словам/символам
+      let cut = s.lastIndexOf(' ', max);
+      if (cut < max / 2) cut = max;
+      if (cur.length + cut > max) push();
+      cur += s.slice(0, cut);
+      push();
+      s = s.slice(cut);
+    }
+    if (cur.length + s.length > max) push();
+    cur += s;
+  }
+  push();
+  return chunks;
+}
+
+// Разбирает весь текст на задачи (по частям), склеивает без дублей
+async function parseTranscript(text) {
+  const parts = splitText(text);
+  const seen = new Set();
+  const tasks = [];
+  let title = '';
+  for (let i = 0; i < parts.length; i++) {
+    setStatus(parts.length > 1
+      ? `Составляю список задач… (часть ${i + 1} из ${parts.length})`
+      : 'Составляю список задач…');
+    const r = await askLLM(parts[i]);
+    if (!title && r.title) title = r.title;
+    for (const t of r.tasks) {
+      const k = normKey(t);
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      tasks.push({ text: t, done: false });
+    }
+  }
+  return { title, tasks };
+}
+
+/* ---------- основной сценарий ---------- */
+
+async function processAudio(blob, filename) {
+  if (busy) return;
+  showError('');
+  if (!state.settings.key) { showError('Сначала введите ключ Groq API в настройках.'); return; }
+  if (blob.size > MAX_FILE_BYTES) {
+    showError(`Файл слишком большой (${(blob.size / 1048576).toFixed(1)} МБ). Бесплатный тариф Groq принимает файлы до 25 МБ — сократите запись или сожмите файл.`);
+    return;
+  }
+  setBusy(true);
+  let transcript = '';
+  try {
+    setStatus('Распознаю речь…');
+    transcript = await transcribe(blob, filename);
+    if (!transcript) throw new Error('Речь не распознана: в записи не нашлось слов.');
+    const r = await parseTranscript(transcript);
+    addCard({ title: r.title, tasks: r.tasks, transcript, error: '' });
+    setStatus('Готово ✅');
+  } catch (e) {
+    showError(e.message || String(e));
+    if (transcript) {
+      // расшифровку сохраняем, даже если разбор не удался
+      addCard({ title: '', tasks: [], transcript, error: e.message || String(e) });
+    }
+    setStatus('');
+  } finally {
+    setBusy(false);
+  }
+}
+
+function addCard(c) {
+  state.cards.unshift({ id: Date.now() + Math.random().toString(36).slice(2, 6), created: Date.now(), ...c });
+  save();
+  render();
+}
+
+/* ---------- отрисовка ---------- */
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+function cardText(card) {
+  const head = card.title || 'Задачи';
+  return head + '\n' + card.tasks.map(t => (t.done ? '☑ ' : '☐ ') + t.text).join('\n');
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e2) { /* нет */ }
+    ta.remove();
+    return ok;
+  }
+}
+
+function renderCard(card) {
+  const root = el('article', 'panel card');
+  const done = card.tasks.filter(t => t.done).length;
+  const total = card.tasks.length;
+
+  const head = el('div', 'card-head');
+  const h = el('h2', null, `📝 ${card.title || 'Без названия'}${total ? ` · ${done}/${total}` : ''}${total && done === total ? ' 🎉' : ''}`);
+  head.append(h, el('span', 'date', fmtDate(card.created)));
+  root.append(head);
+
+  if (card.error) root.append(el('div', 'error', 'Ошибка: ' + card.error + '\nРасшифровка сохранена ниже.'));
+
+  if (total) {
+    const ul = el('ul', 'tasks');
+    card.tasks.forEach(t => {
+      const li = el('li', t.done ? 'done' : '');
+      li.append(el('span', 'box', t.done ? '✅' : ''), el('span', 'txt', t.text));
+      li.addEventListener('click', () => { t.done = !t.done; save(); render(); });
+      ul.append(li);
+    });
+    root.append(ul);
+  } else if (!card.error) {
+    root.append(el('div', 'empty', '🤷 Задач не нашёл'));
+  }
+
+  const det = el('details', 'tr');
+  if (!total) det.open = true;
+  det.append(el('summary', null, 'Расшифровка'), el('p', null, card.transcript));
+  root.append(det);
+
+  const actions = el('div', 'actions');
+  const copyBtn = el('button', 'small', 'Копировать');
+  copyBtn.type = 'button';
+  copyBtn.disabled = !total;
+  copyBtn.addEventListener('click', async () => {
+    const ok = await copyText(cardText(card));
+    copyBtn.textContent = ok ? 'Скопировано ✓' : 'Не удалось';
+    setTimeout(() => { copyBtn.textContent = 'Копировать'; }, 1500);
+  });
+  const delBtn = el('button', 'small danger', 'Удалить');
+  delBtn.type = 'button';
+  delBtn.addEventListener('click', () => {
+    if (!confirm('Удалить эту карточку?')) return;
+    state.cards = state.cards.filter(c => c.id !== card.id);
+    save(); render();
+  });
+  actions.append(copyBtn, delBtn);
+  root.append(actions);
+  return root;
+}
+
+function render() {
+  const box = $('cards');
+  box.textContent = '';
+  if (!state.cards.length) {
+    box.append(el('div', 'none', 'Пока пусто. Запишите голос или загрузите файл.'));
+    return;
+  }
+  state.cards.forEach(c => box.append(renderCard(c)));
+}
+
+function setBusy(v) {
+  busy = v;
+  updateControls();
+}
+
+function updateControls() {
+  const hasKey = !!state.settings.key;
+  $('keyHint').hidden = hasKey;
+  $('recBtn').disabled = !hasKey || (busy && !recorder);
+  $('fileInput').disabled = !hasKey || busy || !!recorder;
+}
+
+/* ---------- запись ---------- */
+
+function pickMime() {
+  if (typeof MediaRecorder === 'undefined') return null;
+  const list = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'];
+  return list.find(t => MediaRecorder.isTypeSupported(t)) || '';
+}
+
+function extFor(mime) {
+  if (/ogg/.test(mime)) return 'ogg';
+  if (/mp4/.test(mime)) return 'm4a';
+  return 'webm';
+}
+
+async function startRecording() {
+  showError('');
+  if (!window.isSecureContext) {
+    showError('Запись с микрофона работает только на https или localhost. Откройте страницу через https или локальный сервер (python -m http.server), либо загрузите готовый файл.');
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+    showError('Ваш браузер не поддерживает запись звука. Загрузите готовый аудиофайл.');
+    return;
+  }
+  try {
+    recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
+    showError(denied
+      ? 'Нет доступа к микрофону. Разрешите его в настройках браузера для этого сайта и попробуйте снова.'
+      : 'Не удалось включить микрофон: ' + (e && e.message ? e.message : e));
+    return;
+  }
+  const mime = pickMime();
+  try {
+    recorder = mime ? new MediaRecorder(recStream, { mimeType: mime }) : new MediaRecorder(recStream);
+  } catch (e) {
+    stopStream();
+    showError('Не удалось начать запись: ' + (e && e.message ? e.message : e));
+    return;
+  }
+  const type = recorder.mimeType || mime || 'audio/webm';
+  recChunks = [];
+  recorder.ondataavailable = ev => { if (ev.data && ev.data.size) recChunks.push(ev.data); };
+  recorder.onstop = () => {
+    clearInterval(recTimerId);
+    $('timer').hidden = true;
+    stopStream();
+    const blob = new Blob(recChunks, { type });
+    recorder = null;
+    $('recBtn').textContent = '🎙 Записать';
+    $('recBtn').classList.remove('rec');
+    updateControls();
+    if (blob.size) processAudio(blob, 'recording.' + extFor(type));
+    else showError('Запись получилась пустой.');
+  };
+  recorder.start();
+  recStart = Date.now();
+  $('timer').textContent = '00:00';
+  $('timer').hidden = false;
+  recTimerId = setInterval(() => { $('timer').textContent = fmtTime(Math.floor((Date.now() - recStart) / 1000)); }, 250);
+  $('recBtn').textContent = '⏹ Остановить';
+  $('recBtn').classList.add('rec');
+  setStatus('Идёт запись…');
+  updateControls();
+}
+
+function stopStream() {
+  if (recStream) recStream.getTracks().forEach(t => t.stop());
+  recStream = null;
+}
+
+function toggleRecording() {
+  if (recorder) { recorder.stop(); return; }
+  if (!busy) startRecording();
+}
+
+/* ---------- файлы и drag-and-drop ---------- */
+
+function handleFile(file) {
+  if (!file) return;
+  if (!/^(audio|video)\//.test(file.type) && !/\.(mp3|wav|m4a|ogg|opus|webm|mp4|mpeg|mpga|flac|mov|mkv)$/i.test(file.name)) {
+    showError('Это не похоже на аудио или видеофайл.');
+    return;
+  }
+  processAudio(file, file.name);
+}
+
+function initDrop() {
+  let depth = 0;
+  window.addEventListener('dragenter', e => { e.preventDefault(); depth++; document.body.classList.add('drag'); });
+  window.addEventListener('dragover', e => e.preventDefault());
+  window.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (!depth) document.body.classList.remove('drag'); });
+  window.addEventListener('drop', e => {
+    e.preventDefault(); depth = 0; document.body.classList.remove('drag');
+    if (!state.settings.key) { showError('Сначала введите ключ Groq API в настройках.'); return; }
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    handleFile(f);
+  });
+}
+
+/* ---------- настройки ---------- */
+
+function initSettings() {
+  const s = state.settings;
+  $('keyInput').value = s.key;
+  $('langSel').value = s.lang;
+  $('whisperInput').value = s.whisper;
+  $('modelsInput').value = s.models.join(', ');
+  $('settings').open = !s.key;
+
+  $('keyInput').addEventListener('input', e => { s.key = e.target.value.trim(); save(); updateControls(); });
+  $('langSel').addEventListener('change', e => { s.lang = e.target.value; save(); });
+  $('whisperInput').addEventListener('input', e => { s.whisper = e.target.value.trim() || DEFAULT_SETTINGS.whisper; save(); });
+  $('modelsInput').addEventListener('input', e => {
+    const list = e.target.value.split(',').map(x => x.trim()).filter(Boolean);
+    s.models = list.length ? list : DEFAULT_SETTINGS.models.slice();
+    save();
+  });
+}
+
+/* ---------- старт ---------- */
+
+load();
+initSettings();
+initDrop();
+$('recBtn').addEventListener('click', toggleRecording);
+$('fileInput').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; handleFile(f); });
+updateControls();
+render();
+</script>
+
+<!--
+Как пользоваться:
+1. Ключ API: зарегистрируйтесь на https://console.groq.com/keys и создайте ключ (gsk_…), вставьте его в «Настройки».
+2. Тариф Free у Groq бесплатный. При превышении лимита Groq возвращает ошибку 429, деньги не списываются.
+3. Запуск: просто откройте index.html в браузере. Для записи с микрофона нужен https или localhost —
+   запустите в папке с файлом `python -m http.server` и откройте http://localhost:8000/index.html.
+   Загрузка файлов и drag-and-drop работают и без сервера.
+-->
+</body>
+</html>
