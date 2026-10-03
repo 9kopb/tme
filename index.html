@@ -77,6 +77,13 @@ details.tr summary { cursor: pointer; color: var(--muted); }
 details.tr p { white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; background: var(--bg); padding: 10px 12px; border-radius: 10px; }
 .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .none { text-align: center; color: var(--muted); padding: 24px 0; }
+.draft-editor { display: grid; gap: 12px; margin-top: 12px; }
+.draft-title { width: 100%; }
+.task-editor-list { display: grid; gap: 8px; }
+.task-editor-row { display: flex; gap: 8px; align-items: center; }
+.task-editor-row input { flex: 1; }
+.task-editor-row button { flex: 0 0 auto; }
+.draft-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 </style>
 </head>
 <body>
@@ -116,7 +123,7 @@ details.tr p { white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; b
     </select>
     <label for="whisperInput">Модель распознавания речи</label>
     <input id="whisperInput" type="text" autocomplete="off">
-    <label for="modelsInput">Модели для разбора на задачи (через запятую, по порядку)</label>
+    <label for="modelsInput">Модели для разбора на задачи (��ерез запятую, по порядку)</label>
     <input id="modelsInput" type="text" autocomplete="off">
   </details>
 
@@ -139,7 +146,7 @@ const DEFAULT_SETTINGS = {
 
 const SYSTEM_PROMPT = `Ты превращаешь расшифровку голосового сообщения в список дел (todo).
 Правила:
-- Найди все действия, которые нужно сделать: дела, поручения, покупки, звонки, встречи, напоминания. Не придумывай того, чего нет в тексте.
+- Найди все действия, которые нужно сделать: дела, поручения, покупки, звонки, встречи, напоминания. Не придумы�[...] 
 - Уже сделанное, рассуждения и пересказ событий — не задачи.
 - Одна задача — одно действие. Если в одной фразе несколько дел — раздели их. Повторы объедини.
 - Формулируй коротко, начиная с глагола: «Купить молоко», «Позвонить Ивану насчёт договора».
@@ -229,6 +236,13 @@ function fmtTime(sec) {
 
 function fmtDate(ts) {
   return new Date(ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function normalizeTasks(tasks) {
+  return (Array.isArray(tasks) ? tasks : []).map(item => {
+    const text = (item && typeof item === 'object' ? (item.text || '') : String(item || ''));
+    return { text: String(text).replace(/\s+/g, ' ').trim(), done: !!(item && typeof item === 'object' && item.done) };
+  }).filter(item => item.text);
 }
 
 /* ---------- Groq ---------- */
@@ -327,7 +341,7 @@ function splitText(text, max = MAX_CHUNK_CHARS) {
   let cur = '';
   const push = () => { if (cur.trim()) chunks.push(cur.trim()); cur = ''; };
   for (let s of sentences) {
-    while (s.length > max) { // предложение длиннее лимита — режем по словам/символам
+    while (s.length > max) {
       let cut = s.lastIndexOf(' ', max);
       if (cut < max / 2) cut = max;
       if (cur.length + cut > max) push();
@@ -371,7 +385,7 @@ async function processAudio(blob, filename) {
   showError('');
   if (!state.settings.key) { showError('Сначала введите ключ Groq API в настройках.'); return; }
   if (blob.size > MAX_FILE_BYTES) {
-    showError(`Файл слишком большой (${(blob.size / 1048576).toFixed(1)} МБ). Бесплатный тариф Groq принимает файлы до 25 МБ — сократите запись или сожмите файл.`);
+    showError(`Файл слишком большой (${(blob.size / 1048576).toFixed(1)} МБ). Бесплатный тариф Groq принимает файлы до 25 МБ — сократите размер или используйте более короткую запись.`);
     return;
   }
   setBusy(true);
@@ -381,13 +395,19 @@ async function processAudio(blob, filename) {
     transcript = await transcribe(blob, filename);
     if (!transcript) throw new Error('Речь не распознана: в записи не нашлось слов.');
     const r = await parseTranscript(transcript);
-    addCard({ title: r.title, tasks: r.tasks, transcript, error: '' });
-    setStatus('Готово ✅');
+    const draft = {
+      title: r.title,
+      tasks: r.tasks,
+      transcript,
+      error: '',
+      editing: true
+    };
+    addCard(draft);
+    setStatus('Проверьте список задач и нажмите «Сохранить список»');
   } catch (e) {
     showError(e.message || String(e));
     if (transcript) {
-      // расшифровку сохраняем, даже если разбор не удался
-      addCard({ title: '', tasks: [], transcript, error: e.message || String(e) });
+      addCard({ title: '', tasks: [], transcript, error: e.message || String(e), editing: false });
     }
     setStatus('');
   } finally {
@@ -412,7 +432,7 @@ function el(tag, cls, text) {
 
 function cardText(card) {
   const head = card.title || 'Задачи';
-  return head + '\n' + card.tasks.map(t => (t.done ? '☑ ' : '☐ ') + t.text).join('\n');
+  return head + '\n' + normalizeTasks(card.tasks).map(t => (t.done ? '☑ ' : '☐ ') + t.text).join('\n');
 }
 
 async function copyText(text) {
@@ -430,10 +450,127 @@ async function copyText(text) {
   }
 }
 
-function renderCard(card) {
+function saveDraftCard(card) {
+  const title = card._draftTitle && card._draftTitle.value ? card._draftTitle.value.trim() : (card.title || '');
+  const tasks = [];
+  const inputs = card._draftInputs || [];
+  for (const input of inputs) {
+    const value = (input && input.value || '').replace(/\s+/g, ' ').trim();
+    if (!value) continue;
+    tasks.push({ text: value, done: false });
+  }
+  if (!tasks.length) {
+    showError('Список задач пуст. Добавьте хотя бы одну задачу или удалите карточку.');
+    return false;
+  }
+  card.title = title || 'Задачи';
+  card.tasks = tasks;
+  card.editing = false;
+  delete card._draftTitle;
+  delete card._draftInputs;
+  showError('');
+  save();
+  render();
+  setStatus('Готово ✅');
+  return true;
+}
+
+function renderDraftCard(card) {
   const root = el('article', 'panel card');
-  const done = card.tasks.filter(t => t.done).length;
-  const total = card.tasks.length;
+  const head = el('div', 'card-head');
+  const h = el('h2', null, '📝 Черновик списка');
+  head.append(h, el('span', 'date', fmtDate(card.created)));
+  root.append(head);
+
+  const editor = el('div', 'draft-editor');
+  const titleInput = el('input', 'draft-title');
+  titleInput.type = 'text';
+  titleInput.value = card.title || '';
+  titleInput.placeholder = 'Название списка';
+  card._draftTitle = titleInput;
+  editor.append(titleInput);
+
+  const taskList = el('div', 'task-editor-list');
+  const inputs = [];
+  const tasks = normalizeTasks(card.tasks);
+  if (!tasks.length) {
+    tasks.push({ text: '', done: false });
+  }
+
+  tasks.forEach((task, idx) => {
+    const row = el('div', 'task-editor-row');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = task.text;
+    input.placeholder = `Задача ${idx + 1}`;
+    inputs.push(input);
+    const removeBtn = el('button', 'small danger', 'Удалить');
+    removeBtn.type = 'button';
+    removeBtn.addEventListener('click', () => {
+      const list = normalizeTasks(card.tasks);
+      list.splice(idx, 1);
+      card.tasks = list;
+      save();
+      render();
+    });
+    row.append(input, removeBtn);
+    taskList.append(row);
+  });
+  card._draftInputs = inputs;
+  editor.append(taskList);
+
+  const addTaskBtn = el('button', 'small', 'Добавить задачу');
+  addTaskBtn.type = 'button';
+  addTaskBtn.addEventListener('click', () => {
+    const row = el('div', 'task-editor-row');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Новая задача';
+    inputs.push(input);
+    const removeBtn = el('button', 'small danger', 'Удалить');
+    removeBtn.type = 'button';
+    removeBtn.addEventListener('click', () => {
+      const idx = inputs.indexOf(input);
+      if (idx >= 0) inputs.splice(idx, 1);
+      row.remove();
+    });
+    row.append(input, removeBtn);
+    taskList.append(row);
+  });
+
+  const actions = el('div', 'draft-actions');
+  const saveBtn = el('button', 'small primary', 'Сохранить список');
+  saveBtn.type = 'button';
+  saveBtn.addEventListener('click', () => {
+    saveDraftCard(card);
+  });
+
+  const cancelBtn = el('button', 'small danger', 'Отмена');
+  cancelBtn.type = 'button';
+  cancelBtn.addEventListener('click', () => {
+    if (!confirm('Удалить черновик?')) return;
+    state.cards = state.cards.filter(c => c.id !== card.id);
+    save();
+    render();
+  });
+
+  actions.append(saveBtn, cancelBtn, addTaskBtn);
+  editor.append(actions);
+  root.append(editor);
+
+  const det = el('details', 'tr');
+  det.open = true;
+  det.append(el('summary', null, 'Расшифровка'), el('p', null, card.transcript));
+  root.append(det);
+  return root;
+}
+
+function renderCard(card) {
+  if (card.editing) return renderDraftCard(card);
+
+  const root = el('article', 'panel card');
+  const done = normalizeTasks(card.tasks).filter(t => t.done).length;
+  const total = normalizeTasks(card.tasks).length;
 
   const head = el('div', 'card-head');
   const h = el('h2', null, `📝 ${card.title || 'Без названия'}${total ? ` · ${done}/${total}` : ''}${total && done === total ? ' 🎉' : ''}`);
@@ -442,12 +579,20 @@ function renderCard(card) {
 
   if (card.error) root.append(el('div', 'error', 'Ошибка: ' + card.error + '\nРасшифровка сохранена ниже.'));
 
-  if (total) {
+  const tasks = normalizeTasks(card.tasks);
+  if (tasks.length) {
     const ul = el('ul', 'tasks');
-    card.tasks.forEach(t => {
+    tasks.forEach(t => {
       const li = el('li', t.done ? 'done' : '');
       li.append(el('span', 'box', t.done ? '✅' : ''), el('span', 'txt', t.text));
-      li.addEventListener('click', () => { t.done = !t.done; save(); render(); });
+      li.addEventListener('click', () => {
+        const arr = normalizeTasks(card.tasks);
+        const idx = arr.findIndex(item => item.text === t.text && item.done === t.done);
+        if (idx >= 0) arr[idx].done = !arr[idx].done;
+        card.tasks = arr;
+        save();
+        render();
+      });
       ul.append(li);
     });
     root.append(ul);
@@ -456,14 +601,14 @@ function renderCard(card) {
   }
 
   const det = el('details', 'tr');
-  if (!total) det.open = true;
+  if (!tasks.length) det.open = true;
   det.append(el('summary', null, 'Расшифровка'), el('p', null, card.transcript));
   root.append(det);
 
   const actions = el('div', 'actions');
   const copyBtn = el('button', 'small', 'Копировать');
   copyBtn.type = 'button';
-  copyBtn.disabled = !total;
+  copyBtn.disabled = !tasks.length;
   copyBtn.addEventListener('click', async () => {
     const ok = await copyText(cardText(card));
     copyBtn.textContent = ok ? 'Скопировано ✓' : 'Не удалось';
@@ -520,7 +665,7 @@ function extFor(mime) {
 async function startRecording() {
   showError('');
   if (!window.isSecureContext) {
-    showError('Запись с микрофона работает только на https или localhost. Откройте страницу через https или локальный сервер (python -m http.server), либо загрузите готовый файл.');
+    showError('Запись с микрофона работает только на https или localhost. Откройте страницу через https или локальный сервер (`python -m http.server`) и откройте http://localhost:8000/index.html.');
     return;
   }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
